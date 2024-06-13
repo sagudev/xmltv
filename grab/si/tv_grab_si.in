@@ -234,8 +234,8 @@ $bar->finish() && undef $bar if defined $bar;
 $writer->end();
 
 sub parse_show {
-    my ($link, $id, $parse_date, $start_time, $end_time) = @_;
-    #warn "$link, $id, $parse_date, $start_time, $end_time";
+    my ($link, $id, $parse_date, ) = @_;
+    #warn "$link, $id, $parse_date";
     my $url = $head->{q(source-info-url)};
     my $tv_show = HTML::TreeBuilder->new();
     # put date in right format for website
@@ -249,17 +249,38 @@ sub parse_show {
     my %show;
     $show{channel} = $id;
 
+    my $content_div = $tv_show->look_down('_tag' => 'div', 'class' => 'inline desktop:block desktop:grow');
+    my $time_div = $tv_show->look_down('_tag' => 'i', 'class' => 'icon icon-clock text-[32px]')->right;
+
+    # sometimes there is an error on site, in list there is programme
+    # but if you click on it it gives back to homepage, so skip this errors
+    if($content_div) {
+        my $title = $content_div->look_down('_tag' => 'h1');
+        $show{'title'} = [[$title->as_text(), $lang]];
+        my $sub_title = $content_div->look_down('_tag' => 'h2');
+        $show{'sub-title'} = [[$sub_title->as_text()]] if($sub_title);
+    } else {
+        warn "no content_div";
+        return;
+    }
+
+    my @time = $time_div->descendants();
+    my $date = $time[0]->as_text();
+    my @times = split('–', $time[1]->as_text());
+    my @start_time = split('\.', $times[0]);
+    my @end_time = split('\.', $times[1]);
+
     $show{start} = DateTime->new (
         year => $parse_date->year()
         ,month => $parse_date->month()
         ,day   => $parse_date->day()
-        ,hour  => substr($start_time, 0, 2)
-        ,minute => substr($start_time, -2)
+        ,hour  => $start_time[0]
+        ,minute => $start_time[1]
         ,second => 0 # no data
         ,time_zone => 'Europe/Ljubljana'
     )->strftime( "%Y%m%d%H%M%S %z" );
 
-    if(int(substr($start_time, 0, 2)) > int(substr($end_time, 0, 2))) { # new day
+    if($start_time[0] > $end_time[0]) { # new day
         $parse_date = $parse_date->add ( days => 1 );
     }
     
@@ -267,96 +288,46 @@ sub parse_show {
         year => $parse_date->year()
         ,month => $parse_date->month(),
         ,day   => $parse_date->day(),
-        ,hour  => substr($end_time, 0, 2)
-        ,minute => substr($end_time, -2)
+        ,hour  => $end_time[0]
+        ,minute => $end_time[1]
         ,second => 0 # no data
         ,time_zone => 'Europe/Ljubljana'
     )->strftime( "%Y%m%d%H%M%S %z" );
 
-    #$tv_show = $tv_show->look_down('itemtype' => 'http://schema.org/Episode');
-    my $title_tag = $tv_show->look_down('_tag' => 'h2', 'class' => 'inline-heading');
-    
-    # sometimes there is an error on site, in list there is programme 
-    # but if you click on it it gives back to homepage, so skip this errors
-    if($title_tag) {
-        my $title = $title_tag->look_down('_tag' => 'span');
-        $show{'title'} = [[$title->as_text(), $lang]];
-        my $sub_title = $title_tag->look_down('_tag' => 'span', 'class' => 'original-title');
-        $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
-    } else {
-        return;
-    }
-    
+    my $meta = $content_div->look_down('_tag' => 'p');
+    my @cat_keywords = split(' / ', $meta->as_text());
+    $show{category} = [[ $cat_keywords[0], $lang ]];
 
-    # Beschreibung
+    if ($cat_keywords[1]) {
+        my @keywords = split(', ', $cat_keywords[1]);
+        for my $member ( @keywords ) {
+            push @{$show{keyword}}, [$member, $lang ];
+        }
+    }
+
+    my $icon = $content_div->look_down('_tag' => 'img');
+    if ($icon) {
+        $show{icon} = [{'src' => "https://tv-spored.siol.net" . $icon->attr_get_i('src')}];
+    }
+
+    my $more_info = $content_div->look_down('_tag' => 'div', 'class' => 'flex flex-col gap-6 mt-5');
+
     my $desc = "";
-    foreach my $description ($tv_show->look_down('_tag' => 'p', 'class' => 'content')) {
+    foreach my $description ($more_info->look_down('_tag' => 'p')) {
         if ($description) {
             $desc = "$desc".$description->as_text();
-            my $icon = $description->look_down('itemprop' => 'image');
-            if ($icon) {
-                $show{icon} = [{'src' => $icon->attr_get_i('content')}];
-            }
         }
     }
     $show{desc} = [[ $desc, $lang ]] if !($desc eq "");
 
-    # Produktionsjahr
-    #foreach my $year ($tv_show->look_down('class' => 'tv-detail-year tv-detail-short')) {
-    #    $show{date} = $year->right()->as_text();
-    #}
-
-    my $meta = $tv_show->look_down('_tag' => 'p', 'class' => 'event-meta');
-
-    # category
-    push @{$show{category}}, [substr($meta->as_text(), 0, index($meta->as_text(), '/')), $lang ];
-    my $genre = $meta->look_down('itemprop' => 'genre');
-    if($genre) {
-        push @{$show{category}}, [$genre->as_text(), $lang ];
-    };
-
-    # Produktionsland
-    #foreach my $country ($tv_show->look_down('class' => 'tv-detail-country tv-detail-short')) {
-    #    my @countries = split(m/\s*[\/,]\s*/, $country->right()->as_text());
-    #    foreach (@countries) {
-    #        push @{$show{country}}, [$_, $lang ];
-    #    }
-    #}
-
-    # Cast
-    foreach my $cast ($tv_show->look_down('itemprop' => 'actor')) {
-        push @{$show{credits}{actor}}, $cast->look_down('itemprop' => 'name')->as_text();
-    }
-
-    # Director
-    foreach my $dir ($tv_show->look_down('itemprop' => 'director')) {
-        push @{$show{credits}{director}}, $dir->look_down('itemprop' => 'name')->as_text();
-    }
-
-    # S/E
-    # Here is a lot of checks to prevent warnings
-    if($tv_show->look_down('itemprop' => 'partOfSeason')) {
-        my $season_el = $tv_show->look_down('itemprop' => 'seasonNumber');
-        my $episode_el = $tv_show->look_down('itemprop' => 'episodeNumber');
-        my $season = "";
-        my $episode = "";
-        if($season_el) {
-            $season = int($season_el->as_text()) - 1;
+    foreach my $span ($more_info->look_down('_tag' => 'span')) {
+        if (index($span->as_text(), "Režija") != -1) {
+            push @{$show{credits}{director}}, $span->right->as_text();
         }
-        if($episode_el) {
-            $episode = int($episode_el->as_text()) - 1;
-        }
-        $show{'episode-num'} = [[ "$season.$episode." , 'xmltv_ns' ]];
-    }
 
-    # Stars
-    my $star = $meta->as_trimmed_text();
-    if(length($star) > 44) {
-        $star = substr($star, -45, 3);
-        if ($star) {
-            $star =~ s/,/./g;
-            if (looks_like_number($star)) {
-                $show{'star-rating'} = [$star."/10"];
+        if (index($span->as_text(), "Igrajo") != -1) {
+            foreach my $a (split(', ', $span->right->as_text())) {
+                push @{$show{credits}{actor}}, $a;
             }
         }
     }
@@ -367,14 +338,12 @@ sub parse_show {
 # Can't call method "extract_links" on an undefined value
 sub parse_show_list {
     my ($tb, $parse_date, $id) = @_;
-    my $table = $tb->look_down('class' => 'table-list-rows');
+    my $table = $tb->look_down('class' => 'flex flex-col gap-2 mt-2');
     if ($table) {
-        for (@{  $tb->look_down('class' => 'table-list-rows')->extract_links('a')  }) {
+        for (@{  $table->extract_links('a')  }) {
             # some things are parsed here
             my $element=@$_[1]->look_down('class' => 'col-9');
-            my $start_time = $element->attr_get_i('data-start_time');
-            my $end_time = $element->attr_get_i('data-end_time');
-            parse_show(@$_[0], $id, $parse_date->clone(), $start_time, $end_time);
+            parse_show(@$_[0], $id, $parse_date->clone());
         };
         return 1;
     } else {
@@ -429,12 +398,12 @@ sub get_channels() {
     $tb->eof;
 
     ## getting the channels directly selectable
-    foreach($tb->look_down('_tag' => 'a', class => 'row')) {
-        my $channel_name = ($_->look_down('_tag' => 'div', class => 'col-11'))->as_text;
+    foreach($tb->look_down('_tag' => 'a', class => 'relative inline-block w-full h-full')) {
+        my $channel_name = ($_->look_down('_tag' => 'img'))->attr_get_i('alt');
         my $channel_logo = ($_->look_down('_tag' => 'img'))->attr_get_i('src');
         my $id = substr($_->attr_get_i('href'), 7);
         $channels{uri_escape($id)} = $channel_name;
-        $channels_logo{uri_escape($id)} = "http:" . $channel_logo;
+        $channels_logo{uri_escape($id)} = "https://tv-spored.siol.net" . $channel_logo;
     }
     $tb->delete;
 
