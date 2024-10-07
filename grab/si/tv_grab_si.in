@@ -250,7 +250,6 @@ sub parse_show {
     $show{channel} = $id;
 
     my $content_div = $tv_show->look_down('_tag' => 'div', 'class' => 'inline desktop:block desktop:grow');
-    my $time_div = $tv_show->look_down('_tag' => 'i', 'class' => 'icon icon-clock text-[32px]')->right;
 
     # sometimes there is an error on site, in list there is programme
     # but if you click on it it gives back to homepage, so skip this errors
@@ -263,6 +262,13 @@ sub parse_show {
         warn "no content_div";
         return;
     }
+
+    my $time_div = $tv_show->look_down('_tag' => 'i', 'class' => 'icon icon-clock text-[32px]');
+    if(!$time_div) {
+        warn "no time_div";
+        return;
+    }
+    my $time_div = $time_div->right;
 
     my @time = $time_div->descendants();
     my $date = $time[0]->as_text();
